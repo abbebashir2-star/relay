@@ -22,21 +22,25 @@ class MainActivity : AppCompatActivity() {
 
     private val h = Handler(Looper.getMainLooper())
 
-    private val resume = Runnable {
-        try {
-            web.onResume()
-            web.evaluateJavascript("window.dispatchEvent(new Event('focus'));", null)
-        } catch (e: Exception) {
+    private val resumeR: Runnable = object : Runnable {
+        override fun run() {
+            try {
+                web.onResume()
+                web.evaluateJavascript("window.dispatchEvent(new Event('focus'));", null)
+            } catch (e: Exception) {
+            }
         }
     }
 
-    private val nudge = Runnable {
-        try {
-            web.onPause()
-        } catch (e: Exception) {
+    private val nudge: Runnable = object : Runnable {
+        override fun run() {
+            try {
+                web.onPause()
+            } catch (e: Exception) {
+            }
+            h.postDelayed(resumeR, 200)
+            h.postDelayed(this, 2500)
         }
-        h.postDelayed(resume, 200)
-        h.postDelayed(nudge, 2500)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
