@@ -44,26 +44,29 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // ge bankens sida en akta osynlig -> synlig, plus fokus och pageshow
-        web.postDelayed(object : Runnable {
+        val resume = object : Runnable {
+            override fun run() {
+                try {
+                    web.onResume()
+                    web.evaluateJavascript(
+                        "window.dispatchEvent(new Event('focus'));", null)
+                } catch (e: Exception) {
+                }
+            }
+        }
+
+        val nudge = object : Runnable {
             override fun run() {
                 try {
                     web.onPause()
-                    web.postDelayed({
-                        try {
-                            web.onResume()
-                            web.evaluateJavascript(
-                                "window.dispatchEvent(new Event('focus'));" +
-                                "document.dispatchEvent(new Event('visibilitychange'));" +
-                                "window.dispatchEvent(new Event('pageshow'));", null)
-                        } catch (e: Exception) {
-                        }
-                    }, 200)
+                    web.postDelayed(resume, 200)
                 } catch (e: Exception) {
                 }
                 web.postDelayed(this, 2500)
             }
-        }, 4000)
+        }
+
+        web.postDelayed(nudge, 4000)
 
         findViewById<EditText>(R.id.server).setText(Api.base)
         findViewById<Button>(R.id.save).setOnClickListener {
@@ -107,7 +110,6 @@ class MainActivity : AppCompatActivity() {
             Api.postToken(session, t)
             status.text = "Token skickad"
         }
-        // oppna BankID sa att bankens sida faktiskt blir osynlig och synlig igen
         startActivity(Intent(Intent.ACTION_VIEW, u).setPackage("com.bankid.bus"))
     }
 
