@@ -17,7 +17,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var web: WebView
     private lateinit var status: TextView
     private var session = ""
-    private var last: String? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(b: Bundle?) {
@@ -29,8 +28,10 @@ class MainActivity : AppCompatActivity() {
         web.keepScreenOn = true
         web.settings.javaScriptEnabled = true
         web.settings.domStorageEnabled = true
-        // se ut som en vanlig mobil, inte en WebView
-        web.settings.userAgentString = web.settings.userAgentString.replace("; wv", "")
+        try {
+            web.settings.userAgentString = web.settings.userAgentString.replace("; wv", "")
+        } catch (e: Exception) {
+        }
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
                 if (r.url.scheme == "bankid") { grab(r.url); return true }
@@ -55,20 +56,6 @@ class MainActivity : AppCompatActivity() {
         newSession()
     }
 
-    override fun onResume() {
-        super.onResume()
-        web.onResume()
-        // knuffa bankens sida att kolla ordern igen
-        web.evaluateJavascript(
-            "window.dispatchEvent(new Event('focus'));" +
-            "document.dispatchEvent(new Event('visibilitychange'));", null)
-    }
-
-    override fun onPause() {
-        web.onPause()
-        super.onPause()
-    }
-
     private fun newSession() {
         Api.newSession { code ->
             runOnUiThread {
@@ -89,13 +76,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun grab(u: Uri) {
         val t = u.getQueryParameter("autostarttoken")
-            ?: u.getQueryParameter("autoStartToken")
-        if (forward() && t != null && t != last) {
-            last = t
+            ?: u.getQueryParameter("autoStartToken") ?: return
+        if (t == prefs().getString("last", null)) return
+        prefs().edit().putString("last", t).apply()
+        if (forward()) {
             Api.postToken(session, t)
             status.text = "Token skickad"
         }
-        startActivity(Intent(Intent.ACTION_VIEW, u).setPackage("com.bankid.bus"))
     }
 
     private fun share() {
