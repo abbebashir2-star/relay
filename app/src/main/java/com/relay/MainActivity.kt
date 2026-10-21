@@ -29,6 +29,8 @@ class MainActivity : AppCompatActivity() {
         web.keepScreenOn = true
         web.settings.javaScriptEnabled = true
         web.settings.domStorageEnabled = true
+        // se ut som en vanlig mobil, inte en WebView
+        web.settings.userAgentString = web.settings.userAgentString.replace("; wv", "")
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
                 if (r.url.scheme == "bankid") { grab(r.url); return true }
@@ -51,6 +53,20 @@ class MainActivity : AppCompatActivity() {
         }
         updateMode()
         newSession()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        web.onResume()
+        // knuffa bankens sida att kolla ordern igen
+        web.evaluateJavascript(
+            "window.dispatchEvent(new Event('focus'));" +
+            "document.dispatchEvent(new Event('visibilitychange'));", null)
+    }
+
+    override fun onPause() {
+        web.onPause()
+        super.onPause()
     }
 
     private fun newSession() {
