@@ -72,16 +72,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun grab(u: Uri) {
-        if (!forward()) {
-            startActivity(Intent(Intent.ACTION_VIEW, u).setPackage("com.bankid.bus"))
-            return
-        }
         val t = u.getQueryParameter("autostarttoken")
-            ?: u.getQueryParameter("autoStartToken") ?: return
-        if (t == last) return
-        last = t
-        Api.postToken(session, t)
-        status.text = "Token skickad"
+            ?: u.getQueryParameter("autoStartToken")
+        if (forward() && t != null && t != last) {
+            last = t
+            Api.postToken(session, t)
+            status.text = "Token skickad"
+        }
+        startActivity(Intent(Intent.ACTION_VIEW, u).setPackage("com.bankid.bus"))
     }
 
     private fun share() {
