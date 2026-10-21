@@ -4,8 +4,6 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -19,29 +17,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var web: WebView
     private lateinit var status: TextView
     private var session = ""
-
-    private val h = Handler(Looper.getMainLooper())
-
-    private val resumeR: Runnable = object : Runnable {
-        override fun run() {
-            try {
-                web.onResume()
-                web.evaluateJavascript("window.dispatchEvent(new Event('focus'));", null)
-            } catch (e: Exception) {
-            }
-        }
-    }
-
-    private val nudge: Runnable = object : Runnable {
-        override fun run() {
-            try {
-                web.onPause()
-            } catch (e: Exception) {
-            }
-            h.postDelayed(resumeR, 200)
-            h.postDelayed(this, 2500)
-        }
-    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(b: Bundle?) {
@@ -68,8 +43,6 @@ class MainActivity : AppCompatActivity() {
                 return false
             }
         }
-        h.postDelayed(nudge, 4000)
-
         findViewById<EditText>(R.id.server).setText(Api.base)
         findViewById<Button>(R.id.save).setOnClickListener {
             val s = findViewById<EditText>(R.id.server).text.toString().trim()
